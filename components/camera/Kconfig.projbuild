@@ -1,0 +1,121 @@
+menu "ESP32 Camera configuration"
+
+config ENABLE_TEST_PATTERN
+	bool "Enable test pattern on camera output"
+	default n
+	help
+		Configure the camera module to output test pattern instead of live image.
+		
+		Use this option to troubleshoot image issues like noise,
+		distortion, not legible and missing live image.
+		Instead, module will generate regular vertical bars 
+		in shades from dark to white.
+        
+config OV2640_SUPPORT
+	bool "OV2640 Support"
+	default y
+	help
+		Enable this option if you want to use the OV2640.
+		Disable this option to safe memory.
+
+config OV7725_SUPPORT
+	bool "OV7725 Support"
+	default y
+	help
+		Enable this option if you want to use the OV7725.
+		Disable this option to safe memory.
+
+config XCLK_FREQ
+    int "XCLK Frequency"
+    default "20000000"
+    help
+        The XCLK Frequency in Herz.
+
+      
+menu "Pin Configuration"
+    config D0
+        int "D0"
+        default "5"
+    config D1
+        int "D1"
+        default "18"
+    config D2
+        int "D2"
+        default "19"
+    config D3
+        int "D3"
+        default "21"
+    config D4
+        int "D4"
+        default "36"
+    config D5
+        int "D5"
+        default "39"
+    config D6
+        int "D6"
+        default "34"
+    config D7
+        int "D7"
+        default "35"
+    config XCLK
+        int "XCLK"
+        default "0"
+    config PCLK
+        int "PCLK"
+        default "22"
+    config VSYNC
+        int "VSYNC"
+        default "25"
+    config HREF
+        int "HREF"
+        default "23"
+    config SDA
+        int "SDA"
+        default "26"
+    config SCL
+        int "SCL"
+        default "27"
+    config RESET
+        int "RESET"
+        default "32"
+endmenu
+
+menu "Socket Configuration"
+
+    choice IP_MODE
+        prompt "IP Version"
+        help
+            can use either IPV4 or IPV6.
+
+        config IPV4
+            bool "IPV4"
+
+        config IPV6
+            bool "IPV6"
+
+    endchoice
+
+    config IPV4_ADDR
+        string "IPV4 Address"
+        default "192.168.6.165"
+        depends on IPV4
+        help
+            will connect to this IPV4 address.
+
+    config IPV6_ADDR
+        string "IPV6 Address"
+        default "FE80::30AD:E57B:C212:68AD"
+        depends on IPV6
+        help
+            will connect to this IPV6 address.
+
+    config PORT
+        int "Port"
+        range 0 65535
+        default 3333
+        help
+            The remote port to which the client will connect to.
+
+endmenu
+
+endmenu
