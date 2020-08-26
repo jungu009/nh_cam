@@ -48,7 +48,7 @@ static const char* TAG = "nh_camera_main";
 
 /** camera config **/
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
-#define CAMERA_FRAME_SIZE CAMERA_FS_VGA
+#define CAMERA_FRAME_SIZE CAMERA_FS_UXGA
 
 size_t pic_size;
 uint8_t* buffer;
@@ -264,7 +264,7 @@ static void smartconfig_task(void * parm)
         if(uxBits & CONNECTED_BIT) {
             ESP_LOGI(TAG, "WiFi Connected to ap");
 
-            //TODO ·¢ËÍÕÕÆ¬µ½·þÎñÆ÷
+            //TODO ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             led_open();
             esp_err_t err = camera_run();
             if (err != ESP_OK) {
