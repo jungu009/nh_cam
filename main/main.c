@@ -57,7 +57,7 @@ static const char* TAG = "nh_camera_main";
 
 /** camera config **/
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
-#define CAMERA_FRAME_SIZE CAMERA_FS_VGA
+#define CAMERA_FRAME_SIZE CAMERA_FS_UXGA
 
 static camera_pixelformat_t s_pixel_format;
 
@@ -206,6 +206,7 @@ static esp_err_t init_camera()
 
 static void smartconfig_task(void * parm);
 static void tcp_client_task(void *pvParameters);
+static void save_local_task(void *pvParameters);
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -250,6 +251,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     } else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
     	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
     	xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
+//    	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
     }
 }
 
@@ -265,7 +267,6 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
-    ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &event_handler, NULL) );
 
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start() );
@@ -375,7 +376,9 @@ static void tcp_client_task(void *pvParameters)
 			esp_err_t error = camera_run();
 			if (error != ESP_OK) {
 				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
-				return;
+				led_close();
+				vTaskDelay(5000 / portTICK_PERIOD_MS);
+				continue;
 			}
 			led_close();
 			ESP_LOGI(TAG, "LED close");
@@ -456,7 +459,9 @@ void app_main(void)
 
 //	init_sdcard();
 
-	init_camera();
+	if(init_camera() == ESP_FAIL){
+		ESP_LOGI(TAG, "\n\n\n\n\n camera init failed \n\n\n\n\n");;
+	}
 
 	initialise_wifi();
 
