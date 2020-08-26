@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include <sys/param.h>
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,6 +20,8 @@
 #include "esp_event.h"
 #include "esp_event_loop.h"
 
+#include "esp_vfs_fat.h"
+
 #include "esp_wifi.h"
 #include "esp_smartconfig.h"
 #include "esp_wpa2.h"
@@ -29,6 +34,10 @@
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/sdmmc_host.h"
+#include "driver/sdspi_host.h"
+
+#include "sdmmc_cmd.h"
 
 #include "camera.h"
 #include "bitmap.h"
@@ -50,9 +59,6 @@ static const char* TAG = "nh_camera_main";
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
 #define CAMERA_FRAME_SIZE CAMERA_FS_UXGA
 
-size_t pic_size;
-uint8_t* buffer;
-
 static camera_pixelformat_t s_pixel_format;
 
 /** smart_config **/
@@ -60,6 +66,86 @@ static EventGroupHandle_t s_wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
 
+#ifdef USE_SPI_MODE
+// Pin mapping when using SPI mode.
+// With this mapping, SD card can be used both in SPI and 1-line SD mode.
+// Note that a pull-up on CS line is required in SD mode.
+#define PIN_NUM_MISO 2
+#define PIN_NUM_MOSI 15
+#define PIN_NUM_CLK  14
+#define PIN_NUM_CS   13
+#endif //USE_SPI_MODE
+
+static sdmmc_card_t* card;
+
+static esp_err_t init_sdcard()
+{
+    ESP_LOGI(TAG, "Initializing SD card");
+
+#ifndef USE_SPI_MODE
+    ESP_LOGI(TAG, "Using SDMMC peripheral");
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+
+    // To use 1-line SD mode, uncomment the following line:
+    // slot_config.width = 1;
+
+    // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
+    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
+    // does make a difference some boards, so we do that here.
+    gpio_set_pull_mode(15, GPIO_PULLUP_ONLY);   // CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode(2, GPIO_PULLUP_ONLY);    // D0, needed in 4- and 1-line modes
+    gpio_set_pull_mode(4, GPIO_PULLUP_ONLY);    // D1, needed in 4-line mode only
+    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only
+    gpio_set_pull_mode(13, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
+
+#else
+    ESP_LOGI(TAG, "Using SPI peripheral");
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
+    slot_config.gpio_miso = PIN_NUM_MISO;
+    slot_config.gpio_mosi = PIN_NUM_MOSI;
+    slot_config.gpio_sck  = PIN_NUM_CLK;
+    slot_config.gpio_cs   = PIN_NUM_CS;
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+#endif //USE_SPI_MODE
+
+    // Options for mounting the filesystem.
+    // If format_if_mount_failed is set to true, SD card will be partitioned and
+    // formatted in case when mounting fails.
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    // Use settings defined above to initialize SD card and mount FAT filesystem.
+    // Note: esp_vfs_fat_sdmmc_mount is an all-in-one convenience function.
+    // Please check its source code and implement error recovery when developing
+    // production applications.
+    esp_err_t ret = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount filesystem. "
+                "If you want the card to be formatted, set format_if_mount_failed = true.");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize the card (%s). "
+                "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
+        }
+        return ESP_FAIL;
+    }
+
+    // Card has been initialized, print its properties
+    sdmmc_card_print_info(stdout, card);
+
+    return ESP_OK;
+}
 
 static esp_err_t init_camera()
 {
@@ -119,6 +205,7 @@ static esp_err_t init_camera()
 }
 
 static void smartconfig_task(void * parm);
+static void tcp_client_task(void *pvParameters);
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -160,6 +247,9 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_ERROR_CHECK( esp_wifi_connect() );
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
         xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
+    } else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
+    	xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
     }
 }
 
@@ -175,9 +265,58 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
+    ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &event_handler, NULL) );
 
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start() );
+}
+
+static void save_local_task(void *pvParameters)
+{
+	ESP_LOGI(TAG, "start save task");
+
+	struct timeval dt;
+
+	while (1) {
+
+//		led_open();
+		ESP_LOGI(TAG, "open LED");
+		esp_err_t error = camera_run();
+		if (error != ESP_OK) {
+			ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
+			return;
+		}
+//		led_close();
+		ESP_LOGI(TAG, "close LED");
+
+		size_t pic_size;
+		uint8_t* buffer;
+
+		pic_size = camera_get_data_size();
+		buffer = camera_get_fb();
+
+		ESP_LOGI(TAG, "save picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
+
+		// First create a file.
+		ESP_LOGI(TAG, "Opening file");
+		gettimeofday(&dt, NULL);
+		long time = dt.tv_sec * 1000 + dt.tv_usec;
+		char filename[32];
+		sprintf(filename, "/sdcard/%ld.jpg", time);
+		FILE* f = fopen(filename, "wb");
+		if (f == NULL) {
+			ESP_LOGE(TAG, "Failed to open file for writing");
+			continue;
+		}
+//		fprintf(f, "Hello %s!\n", card->cid.name);
+		fwrite(buffer, sizeof(uint8_t), pic_size, f);
+
+		fclose(f);
+		ESP_LOGI(TAG, "File written");
+
+		vTaskDelay(5000 / portTICK_PERIOD_MS);
+	}
+	vTaskDelete(NULL);
 }
 
 static void tcp_client_task(void *pvParameters)
@@ -222,26 +361,46 @@ static void tcp_client_task(void *pvParameters)
         ESP_LOGI(TAG, "Successfully connected");
 
         while (1) {
+
+        	ESP_LOGI(TAG, "take a photo");
+			led_open();
+			ESP_LOGI(TAG, "LED open");
+			esp_err_t error = camera_run();
+			if (error != ESP_OK) {
+				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
+				return;
+			}
+			led_close();
+			ESP_LOGI(TAG, "LED close");
+
+			size_t pic_size;
+			uint8_t* buffer;
+
+			pic_size = camera_get_data_size();
+			buffer = camera_get_fb();
+
+			ESP_LOGI(TAG, "send picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
+
             int err = send(sock, buffer, pic_size, 0);
             if (err < 0) {
                 ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                 break;
             }
 
-            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-            // Error occurred during receiving
-            if (len < 0) {
-                ESP_LOGE(TAG, "recv failed: errno %d", errno);
-                break;
-            }
-            // Data received
-            else {
-                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-                ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
-                ESP_LOGI(TAG, "%s", rx_buffer);
-            }
+//            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);  // TODO socket网络接收有问题
+//            // Error occurred during receiving
+//            if (len < 0) {
+//                ESP_LOGE(TAG, "recv failed: errno %d", errno);
+//                break;
+//            }
+//            // Data received
+//            else {
+//                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+//                ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
+//                ESP_LOGI(TAG, "%s", rx_buffer);
+//            }
 
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
         }
 
         if (sock != -1) {
@@ -264,23 +423,7 @@ static void smartconfig_task(void * parm)
         if(uxBits & CONNECTED_BIT) {
             ESP_LOGI(TAG, "WiFi Connected to ap");
 
-            //TODO ������Ƭ��������
-            led_open();
-            esp_err_t err = camera_run();
-            if (err != ESP_OK) {
-                ESP_LOGD(TAG, "Camera capture failed with error = %d", err);
-                return;
-            }
-            led_close();
-
-            pic_size = camera_get_data_size();
-            buffer = camera_get_fb();
-
-            ESP_LOGI(TAG, "send picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
-
-
-            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
-
+//            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
 
         }
         if(uxBits & ESPTOUCH_DONE_BIT) {
@@ -300,12 +443,19 @@ void app_main(void)
 		ESP_ERROR_CHECK( nvs_flash_init() );
 	}
 
+	ESP_LOGI(TAG, "\n\n\n\n\n init info \n\n\n\n\n");
+
 	led_init();
+
+//	init_sdcard();
 
 	init_camera();
 
 	initialise_wifi();
 
+//	ESP_LOGI(TAG, "\n\n\n\n\n start capture \n\n\n\n\n");
+
+//	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
 
 }
 
