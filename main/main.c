@@ -328,6 +328,13 @@ static void tcp_client_task(void *pvParameters)
 
     while (1) {
 
+    	EventBits_t uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
+		if(uxBits & CONNECTED_BIT) {
+			ESP_LOGI(TAG, "tcp_client_task WiFi Connected to ap");
+		}else {
+			continue;
+		}
+
 #ifdef CONFIG_IPV4
         struct sockaddr_in dest_addr;
         dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
@@ -349,14 +356,14 @@ static void tcp_client_task(void *pvParameters)
         int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            break;
+            continue;
         }
         ESP_LOGI(TAG, "Socket created, connecting to %s:%d", HOST_IP_ADDR, PORT);
 
         int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
         if (err != 0) {
             ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-            break;
+            continue;
         }
         ESP_LOGI(TAG, "Successfully connected");
 
