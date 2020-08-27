@@ -57,7 +57,7 @@ static const char* TAG = "nh_camera_main";
 
 /** camera config **/
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
-#define CAMERA_FRAME_SIZE CAMERA_FS_UXGA
+#define CAMERA_FRAME_SIZE CAMERA_FS_SVGA
 
 static camera_pixelformat_t s_pixel_format;
 
@@ -77,6 +77,8 @@ static const int ESPTOUCH_DONE_BIT = BIT1;
 #endif //USE_SPI_MODE
 
 static sdmmc_card_t* card;
+
+static TaskHandle_t task_handler = NULL;
 
 static esp_err_t init_sdcard()
 {
@@ -247,10 +249,16 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_ERROR_CHECK( esp_wifi_connect() );
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
         xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
-    } else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
-    	xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
     }
+//    else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+//    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
+//    	ESP_LOGI(TAG, "get task state");
+//    	eTaskState t_state = eTaskGetState(task_handler);
+//    	ESP_LOGI(TAG, "task state：%d", t_state);
+//		if(task_handler == NULL) {
+//			xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, &task_handler);
+//		}
+//    }
 }
 
 static void initialise_wifi(void)
@@ -327,14 +335,6 @@ static void tcp_client_task(void *pvParameters)
     int ip_protocol;
 
     while (1) {
-
-    	EventBits_t uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
-		if(uxBits & CONNECTED_BIT) {
-			ESP_LOGI(TAG, "tcp_client_task WiFi Connected to ap");
-		}else {
-			continue;
-		}
-
 #ifdef CONFIG_IPV4
         struct sockaddr_in dest_addr;
         dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
@@ -353,6 +353,7 @@ static void tcp_client_task(void *pvParameters)
         inet6_ntoa_r(dest_addr.sin6_addr, addr_str, sizeof(addr_str) - 1);
 #endif
 
+        ESP_LOGI(TAG, "config Socket");
         int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
@@ -369,31 +370,52 @@ static void tcp_client_task(void *pvParameters)
 
         while (1) {
 
-        	ESP_LOGI(TAG, "take a photo");
-			led_open();
-			ESP_LOGI(TAG, "LED open");
-			esp_err_t error = camera_run();
-			if (error != ESP_OK) {
-				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
-				return;
-			}
-			led_close();
-			ESP_LOGI(TAG, "LED close");
-
-			size_t pic_size;
-			uint8_t* buffer;
-
-			pic_size = camera_get_data_size();
-			buffer = camera_get_fb();
-
-			ESP_LOGI(TAG, "send picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
-
-            int err = send(sock, buffer, pic_size, 0);
-            if (err < 0) {
-                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+            ESP_LOGI(TAG, "Waiting picture command , 0xff 0xfe");
+            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);  // TODO socket网络接收有问题
+            // Error occurred during receiving
+            if (len < 0) {
+                ESP_LOGE(TAG, "recv failed: errno %d", errno);
                 break;
             }
+            // Data received
+            else {
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
+                ESP_LOGI(TAG, "%s", rx_buffer);
 
+                if(rx_buffer[0] == 0xff && rx_buffer[1] == 0xfe){
+
+                	ESP_LOGI(TAG, "take a photo");
+        			led_open();
+        			ESP_LOGI(TAG, "LED open");
+        			esp_err_t error = camera_run();
+        			if (error != ESP_OK) {
+        				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
+        				return;
+        			}
+        			led_close();
+        			ESP_LOGI(TAG, "LED close");
+
+        			size_t pic_size;
+        			uint8_t* buffer;
+
+        			pic_size = camera_get_data_size();
+        			buffer = camera_get_fb();
+
+        			if(buffer[0] == 0XFF && buffer[1] == 0XD8 ){
+						ESP_LOGI(TAG, "send picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
+
+						int err = send(sock, buffer, pic_size, 0);
+						if (err < 0) {
+						ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+						continue;
+						}
+                	}
+        			else{
+        				ESP_LOGI(TAG, "The picture is broken Reconnect the USB TOOL");
+        			}
+                }
+            }
 //            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);  // TODO socket网络接收有问题
 //            // Error occurred during receiving
 //            if (len < 0) {
@@ -407,7 +429,7 @@ static void tcp_client_task(void *pvParameters)
 //                ESP_LOGI(TAG, "%s", rx_buffer);
 //            }
 
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
+//            vTaskDelay(5000 / portTICK_PERIOD_MS);
         }
 
         if (sock != -1) {
@@ -430,15 +452,16 @@ static void smartconfig_task(void * parm)
         if(uxBits & CONNECTED_BIT) {
             ESP_LOGI(TAG, "WiFi Connected to ap");
 
-//            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
+            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
 
         }
         if(uxBits & ESPTOUCH_DONE_BIT) {
             ESP_LOGI(TAG, "smartconfig over");
             esp_smartconfig_stop();
-            vTaskDelete(NULL);
+//            vTaskDelete(NULL);
         }
     }
+    vTaskDelete(NULL);
 }
 
 
@@ -465,4 +488,3 @@ void app_main(void)
 //	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
 
 }
-
