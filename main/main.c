@@ -57,7 +57,7 @@ static const char* TAG = "nh_camera_main";
 
 /** camera config **/
 #define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
-#define CAMERA_FRAME_SIZE CAMERA_FS_UXGA
+#define CAMERA_FRAME_SIZE CAMERA_FS_VGA
 
 static camera_pixelformat_t s_pixel_format;
 
@@ -77,6 +77,8 @@ static const int ESPTOUCH_DONE_BIT = BIT1;
 #endif //USE_SPI_MODE
 
 static sdmmc_card_t* card;
+
+static TaskHandle_t task_handler = NULL;
 
 static esp_err_t init_sdcard()
 {
@@ -206,7 +208,6 @@ static esp_err_t init_camera()
 
 static void smartconfig_task(void * parm);
 static void tcp_client_task(void *pvParameters);
-static void save_local_task(void *pvParameters);
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -248,11 +249,16 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_ERROR_CHECK( esp_wifi_connect() );
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
         xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
-    } else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
-    	xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
-//    	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
     }
+//    else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+//    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
+//    	ESP_LOGI(TAG, "get task state");
+//    	eTaskState t_state = eTaskGetState(task_handler);
+//    	ESP_LOGI(TAG, "task state：%d", t_state);
+//		if(task_handler == NULL) {
+//			xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, &task_handler);
+//		}
+//    }
 }
 
 static void initialise_wifi(void)
@@ -267,6 +273,7 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL) );
     ESP_ERROR_CHECK( esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
+    ESP_ERROR_CHECK( esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &event_handler, NULL) );
 
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start() );
@@ -328,14 +335,6 @@ static void tcp_client_task(void *pvParameters)
     int ip_protocol;
 
     while (1) {
-
-    	EventBits_t uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
-		if(uxBits & CONNECTED_BIT) {
-			ESP_LOGI(TAG, "tcp_client_task WiFi Connected to ap");
-		}else {
-			continue;
-		}
-
 #ifdef CONFIG_IPV4
         struct sockaddr_in dest_addr;
         dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
@@ -354,6 +353,7 @@ static void tcp_client_task(void *pvParameters)
         inet6_ntoa_r(dest_addr.sin6_addr, addr_str, sizeof(addr_str) - 1);
 #endif
 
+        ESP_LOGI(TAG, "config Socket");
         int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
@@ -376,9 +376,7 @@ static void tcp_client_task(void *pvParameters)
 			esp_err_t error = camera_run();
 			if (error != ESP_OK) {
 				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
-				led_close();
-				vTaskDelay(5000 / portTICK_PERIOD_MS);
-				continue;
+				return;
 			}
 			led_close();
 			ESP_LOGI(TAG, "LED close");
@@ -433,15 +431,16 @@ static void smartconfig_task(void * parm)
         if(uxBits & CONNECTED_BIT) {
             ESP_LOGI(TAG, "WiFi Connected to ap");
 
-//            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
+            xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
 
         }
         if(uxBits & ESPTOUCH_DONE_BIT) {
             ESP_LOGI(TAG, "smartconfig over");
             esp_smartconfig_stop();
-            vTaskDelete(NULL);
+//            vTaskDelete(NULL);
         }
     }
+    vTaskDelete(NULL);
 }
 
 
@@ -459,9 +458,7 @@ void app_main(void)
 
 //	init_sdcard();
 
-	if(init_camera() == ESP_FAIL){
-		ESP_LOGI(TAG, "\n\n\n\n\n camera init failed \n\n\n\n\n");;
-	}
+	init_camera();
 
 	initialise_wifi();
 
@@ -470,4 +467,3 @@ void app_main(void)
 //	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
 
 }
-
