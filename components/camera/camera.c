@@ -79,6 +79,7 @@ const int resolution[][2] = { { 40, 30 }, /* 40x30 */
 { 800, 600 }, /* SVGA  */
 { 1280, 1024 }, /* SXGA  */
 { 1600, 1200 }, /* UXGA  */
+{500, 200}, /* custom */
 };
 
 static void i2s_init();
