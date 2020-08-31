@@ -39,12 +39,13 @@
 
 #include "sdmmc_cmd.h"
 
-#include "camera.h"
-#include "bitmap.h"
+#include "esp_camera.h"
 
 #include "led.h"
+#include "main.h"
 
-static const char* TAG = "nh_camera_main";
+
+static const char* TAG = "nh_main";
 
 /** socket config **/
 #ifdef CONFIG_IPV4
@@ -54,12 +55,6 @@ static const char* TAG = "nh_camera_main";
 #endif
 
 #define PORT CONFIG_PORT
-
-/** camera config **/
-#define CAMERA_PIXEL_FORMAT CAMERA_PF_JPEG
-#define CAMERA_FRAME_SIZE 14
-
-static camera_pixelformat_t s_pixel_format;
 
 /** smart_config **/
 static EventGroupHandle_t s_wifi_event_group;
@@ -77,8 +72,6 @@ static const int ESPTOUCH_DONE_BIT = BIT1;
 #endif //USE_SPI_MODE
 
 static sdmmc_card_t* card;
-
-static TaskHandle_t task_handler = NULL;
 
 static esp_err_t init_sdcard()
 {
@@ -149,63 +142,6 @@ static esp_err_t init_sdcard()
     return ESP_OK;
 }
 
-static esp_err_t init_camera()
-{
-	camera_config_t camera_config = {
-	        .ledc_channel = LEDC_CHANNEL_0,
-	        .ledc_timer = LEDC_TIMER_0,
-	        .pin_d0 = CONFIG_D0,
-	        .pin_d1 = CONFIG_D1,
-	        .pin_d2 = CONFIG_D2,
-	        .pin_d3 = CONFIG_D3,
-	        .pin_d4 = CONFIG_D4,
-	        .pin_d5 = CONFIG_D5,
-	        .pin_d6 = CONFIG_D6,
-	        .pin_d7 = CONFIG_D7,
-	        .pin_xclk = CONFIG_XCLK,
-	        .pin_pclk = CONFIG_PCLK,
-	        .pin_vsync = CONFIG_VSYNC,
-	        .pin_href = CONFIG_HREF,
-	        .pin_sscb_sda = CONFIG_SDA,
-	        .pin_sscb_scl = CONFIG_SCL,
-	        .pin_reset = CONFIG_RESET,
-	        .xclk_freq_hz = CONFIG_XCLK_FREQ,
-	    };
-
-	camera_model_t camera_model;
-	esp_err_t err = camera_probe(&camera_config, &camera_model);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Camera probe failed with error 0x%x", err);
-		return ESP_FAIL;
-	}
-
-	if (camera_model == CAMERA_OV7725) {
-		s_pixel_format = CAMERA_PIXEL_FORMAT;
-		camera_config.frame_size = CAMERA_FRAME_SIZE;
-		ESP_LOGI(TAG, "Detected OV7725 camera, using %s bitmap format",
-				CAMERA_PIXEL_FORMAT == CAMERA_PF_GRAYSCALE ?
-						"grayscale" : "RGB565");
-	} else if (camera_model == CAMERA_OV2640) {
-		ESP_LOGI(TAG, "Detected OV2640 camera, using JPEG format");
-		s_pixel_format = CAMERA_PIXEL_FORMAT;
-		camera_config.frame_size = CAMERA_FRAME_SIZE;
-		if (s_pixel_format == CAMERA_PF_JPEG)
-		camera_config.jpeg_quality = 15;
-	} else {
-		ESP_LOGE(TAG, "Camera not supported");
-		return ESP_FAIL;
-	}
-
-	camera_config.pixel_format = s_pixel_format;
-	err = camera_init(&camera_config);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
-		return ESP_FAIL;
-	}
-
-	return ESP_OK;
-}
-
 static void smartconfig_task(void * parm);
 static void tcp_client_task(void *pvParameters);
 
@@ -250,15 +186,6 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
         xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
     }
-//    else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-//    	ESP_LOGI(TAG, "\n\nWIFI_EVENT_STA_CONNECTED\n\n");
-//    	ESP_LOGI(TAG, "get task state");
-//    	eTaskState t_state = eTaskGetState(task_handler);
-//    	ESP_LOGI(TAG, "task state：%d", t_state);
-//		if(task_handler == NULL) {
-//			xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, &task_handler);
-//		}
-//    }
 }
 
 static void initialise_wifi(void)
@@ -279,53 +206,53 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
-static void save_local_task(void *pvParameters)
-{
-	ESP_LOGI(TAG, "start save task");
-
-	struct timeval dt;
-
-	while (1) {
-
-//		led_open();
-		ESP_LOGI(TAG, "open LED");
-		esp_err_t error = camera_run();
-		if (error != ESP_OK) {
-			ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
-			return;
-		}
-//		led_close();
-		ESP_LOGI(TAG, "close LED");
-
-		size_t pic_size;
-		uint8_t* buffer;
-
-		pic_size = camera_get_data_size();
-		buffer = camera_get_fb();
-
-		ESP_LOGI(TAG, "save picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
-
-		// First create a file.
-		ESP_LOGI(TAG, "Opening file");
-		gettimeofday(&dt, NULL);
-		long time = dt.tv_sec * 1000 + dt.tv_usec;
-		char filename[32];
-		sprintf(filename, "/sdcard/%ld.jpg", time);
-		FILE* f = fopen(filename, "wb");
-		if (f == NULL) {
-			ESP_LOGE(TAG, "Failed to open file for writing");
-			continue;
-		}
-//		fprintf(f, "Hello %s!\n", card->cid.name);
-		fwrite(buffer, sizeof(uint8_t), pic_size, f);
-
-		fclose(f);
-		ESP_LOGI(TAG, "File written");
-
-		vTaskDelay(5000 / portTICK_PERIOD_MS);
-	}
-	vTaskDelete(NULL);
-}
+//static void save_local_task(void *pvParameters)
+//{
+//	ESP_LOGI(TAG, "start save task");
+//
+//	struct timeval dt;
+//
+//	while (1) {
+//
+////		led_open();
+//		ESP_LOGI(TAG, "open LED");
+//		esp_err_t error = camera_run();
+//		if (error != ESP_OK) {
+//			ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
+//			return;
+//		}
+////		led_close();
+//		ESP_LOGI(TAG, "close LED");
+//
+//		size_t pic_size;
+//		uint8_t* buffer;
+//
+//		pic_size = camera_get_data_size();
+//		buffer = camera_get_fb();
+//
+//		ESP_LOGI(TAG, "save picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
+//
+//		// First create a file.
+//		ESP_LOGI(TAG, "Opening file");
+//		gettimeofday(&dt, NULL);
+//		long time = dt.tv_sec * 1000 + dt.tv_usec;
+//		char filename[32];
+//		sprintf(filename, "/sdcard/%ld.jpg", time);
+//		FILE* f = fopen(filename, "wb");
+//		if (f == NULL) {
+//			ESP_LOGE(TAG, "Failed to open file for writing");
+//			continue;
+//		}
+////		fprintf(f, "Hello %s!\n", card->cid.name);
+//		fwrite(buffer, sizeof(uint8_t), pic_size, f);
+//
+//		fclose(f);
+//		ESP_LOGI(TAG, "File written");
+//
+//		vTaskDelay(5000 / portTICK_PERIOD_MS);
+//	}
+//	vTaskDelete(NULL);
+//}
 
 static void tcp_client_task(void *pvParameters)
 {
@@ -381,31 +308,21 @@ static void tcp_client_task(void *pvParameters)
             else {
                 rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
                 ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
-                ESP_LOGI(TAG, "%s", rx_buffer);
+                ESP_LOGI(TAG, "0x%x,0x%x\n", rx_buffer[0], rx_buffer[1]);
 
                 if(rx_buffer[0] == 0xff && rx_buffer[1] == 0xfe){
 
                 	ESP_LOGI(TAG, "take a photo");
-        			led_open();
-        			ESP_LOGI(TAG, "LED open");
-        			esp_err_t error = camera_run();
-        			if (error != ESP_OK) {
-        				ESP_LOGI(TAG, "Camera capture failed with error = %d", error);
-        				return;
-        			}
-        			led_close();
-        			ESP_LOGI(TAG, "LED close");
+                	led_open();
+                	camera_fb_t *pic = esp_camera_fb_get();
+                	led_close();
+                    // use pic->buf to access the image
+                    ESP_LOGI(TAG, "Picture taken! Its size was: %zu bytes", pic->len);
 
-        			size_t pic_size;
-        			uint8_t* buffer;
+        			if(pic->buf[0] == 0XFF && pic->buf[1] == 0XD8 ){
+						ESP_LOGI(TAG, "send picture, size width = %d, height = %d", pic->width, pic->height);
 
-        			pic_size = camera_get_data_size();
-        			buffer = camera_get_fb();
-
-        			if(buffer[0] == 0XFF && buffer[1] == 0XD8 ){
-						ESP_LOGI(TAG, "send picture, size width = %d, height = %d", camera_get_fb_width(), camera_get_fb_height());
-
-						int err = send(sock, buffer, pic_size, 0);
+						int err = send(sock, pic->buf, pic->len, 0);
 						if (err < 0) {
 						ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
 						continue;
@@ -416,20 +333,6 @@ static void tcp_client_task(void *pvParameters)
         			}
                 }
             }
-//            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);  // TODO socket网络接收有问题
-//            // Error occurred during receiving
-//            if (len < 0) {
-//                ESP_LOGE(TAG, "recv failed: errno %d", errno);
-//                break;
-//            }
-//            // Data received
-//            else {
-//                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-//                ESP_LOGI(TAG, "Received %d bytes from %s:", len, addr_str);
-//                ESP_LOGI(TAG, "%s", rx_buffer);
-//            }
-
-//            vTaskDelay(5000 / portTICK_PERIOD_MS);
         }
 
         if (sock != -1) {
@@ -464,6 +367,55 @@ static void smartconfig_task(void * parm)
     vTaskDelete(NULL);
 }
 
+static camera_config_t camera_config = {
+    .pin_pwdn  = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sscb_sda = CAM_PIN_SIOD,
+    .pin_sscb_scl = CAM_PIN_SIOC,
+
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    //XCLK 20MHz or 10MHz for OV2640 double FPS (Experimental)
+    .xclk_freq_hz = 20000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+
+    .pixel_format = PIXFORMAT_JPEG,//YUV422,GRAYSCALE,RGB565,JPEG
+    .frame_size = FRAMESIZE_CUSTOME,//QQVGA-QXGA Do not use sizes above QVGA when not JPEG
+
+    .jpeg_quality = 12, //0-63 lower number means higher quality
+    .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
+};
+
+static esp_err_t init_camera()
+{
+    //power up the camera if PWDN pin is defined
+//    if(CAM_PIN_PWDN != -1){
+//        pinMode(CAM_PIN_PWDN, OUTPUT);
+//        digitalWrite(CAM_PIN_PWDN, LOW);
+//    }
+
+    //initialize the camera
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Camera Init Failed");
+        return err;
+    }
+
+    return ESP_OK;
+}
 
 void app_main(void)
 {
@@ -473,8 +425,6 @@ void app_main(void)
 		ESP_ERROR_CHECK( nvs_flash_init() );
 	}
 
-	ESP_LOGI(TAG, "\n\n\n\n\n init info \n\n\n\n\n");
-
 	led_init();
 
 //	init_sdcard();
@@ -482,9 +432,5 @@ void app_main(void)
 	init_camera();
 
 	initialise_wifi();
-
-//	ESP_LOGI(TAG, "\n\n\n\n\n start capture \n\n\n\n\n");
-
-//	xTaskCreate(save_local_task, "save_local", 4096, NULL, 5, NULL);
 
 }

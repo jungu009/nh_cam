@@ -1,0 +1,37 @@
+menu "Socket Configuration"
+
+    choice IP_MODE
+        prompt "IP Version"
+        help
+            can use either IPV4 or IPV6.
+
+        config IPV4
+            bool "IPV4"
+
+        config IPV6
+            bool "IPV6"
+
+    endchoice
+
+    config IPV4_ADDR
+        string "IPV4 Address"
+        default "192.168.6.165"
+        depends on IPV4
+        help
+            will connect to this IPV4 address.
+
+    config IPV6_ADDR
+        string "IPV6 Address"
+        default "FE80::30AD:E57B:C212:68AD"
+        depends on IPV6
+        help
+            will connect to this IPV6 address.
+
+    config PORT
+        int "Port"
+        range 0 65535
+        default 3333
+        help
+            The remote port to which the client will connect to.
+
+endmenu
