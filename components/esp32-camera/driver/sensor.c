@@ -25,5 +25,5 @@ const resolution_info_t resolution[FRAMESIZE_INVALID] = {
     { 2560, 1600, ASPECT_RATIO_16X10 }, /* WQXGA  */
     { 1088, 1920, ASPECT_RATIO_9X16  }, /* Portrait FHD   */
     { 2560, 1920, ASPECT_RATIO_4X3   }, /* QSXGA  */
-	{ 200,  1000, ASPECT_RATIO_1X5 }, /* custom */
+	{ 192,  1000, ASPECT_RATIO_1X5 }, /* custom */
 };

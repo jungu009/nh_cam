@@ -1091,7 +1091,7 @@ esp_err_t camera_init(const camera_config_t* config)
     switch (s_state->sensor.id.PID) {
 #if CONFIG_OV2640_SUPPORT
         case OV2640_PID:
-            if (frame_size > FRAMESIZE_UXGA) {
+            if (frame_size < FRAMESIZE_CUSTOME && frame_size > FRAMESIZE_UXGA) {
                 frame_size = FRAMESIZE_UXGA;
             }
             break;
