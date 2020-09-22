@@ -1384,6 +1384,15 @@ camera_fb_t* esp_camera_fb_get()
     if (s_state == NULL) {
         return NULL;
     }
+//20200918 Read Exposrue Value
+    sensor_t sensor1 = s_state->sensor;
+	char reg04 = SCCB_Read(sensor1.slv_addr, 0x04);
+	short int aec = SCCB_Read(sensor1.slv_addr, 0x10);
+	char reg45 = (SCCB_Read(sensor1.slv_addr, 0x45))& 0x3F;
+	ESP_LOGI(TAG, "REG04:%d", reg04);
+	ESP_LOGI(TAG, "AEC:%d", aec);
+	ESP_LOGI(TAG, "REG45:%d", reg45);
+
     if(!I2S0.conf.rx_start) {
         if(s_state->config.fb_count > 1) {
             ESP_LOGD(TAG, "i2s_run");

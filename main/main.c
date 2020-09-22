@@ -36,6 +36,7 @@
 #include "driver/ledc.h"
 #include "driver/sdmmc_host.h"
 #include "driver/sdspi_host.h"
+#include "driver/i2c.h"
 
 #include "sdmmc_cmd.h"
 
@@ -43,8 +44,10 @@
 
 #include "led.h"
 #include "main.h"
+#include "u8g_arm.h"
+#include "u8g_ll_api.c"
 
-
+extern uint8_t SCCB_Read(uint8_t slv_addr, uint8_t reg);
 static const char* TAG = "nh_main";
 
 /** socket config **/
@@ -71,8 +74,41 @@ static const int ESPTOUCH_DONE_BIT = BIT1;
 #define PIN_NUM_CS   13
 #endif //USE_SPI_MODE
 
-static sdmmc_card_t* card;
+static camera_config_t camera_config = {
+    .pin_pwdn  = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sscb_sda = CAM_PIN_SIOD,
+    .pin_sscb_scl = CAM_PIN_SIOC,
 
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    //XCLK 20MHz or 10MHz for OV2640 double FPS (Experimental)
+    .xclk_freq_hz = 20000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+
+    .pixel_format = PIXFORMAT_JPEG,//YUV422,GRAYSCALE,RGB565,JPEG
+    .frame_size = FRAMESIZE_UXGA,//FRAMESIZE_CUSTOME,//QQVGA-QXGA Do not use sizes above QVGA when not JPEG  改回1600*1200
+
+    .jpeg_quality = 12, //0-63 lower number means higher quality
+    .fb_count = 1, //if more than one, i2s runs in continuous mode. Use only with JPEG
+	.exposure_value = 100
+};
+
+static sdmmc_card_t* card;
+static u8g_t u8g;
+//static esp_err_t init_camera();
 static esp_err_t init_sdcard()
 {
     ESP_LOGI(TAG, "Initializing SD card");
@@ -206,6 +242,145 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
+
+
+void draw(char *str)
+{
+	u8g_SetFont(&u8g, u8g_font_profont29);//u8g_font_fub49n);//u8g_font_profont29);//u8g_font_profont10);//set current font
+	u8g_DrawStr(&u8g, 5, 30, str);//write string - you set coordinates and string
+	u8g_DrawStr(&u8g, 5, 60, "I'm NH.");//write string - you set coordinates and string
+//	u8g_DrawBox(&u8g, 30, 30, 35, 35);//draw some box
+}
+
+
+
+void ui_show(char *str, uint8_t x, uint8_t y)
+{
+
+	u8g_FirstPage(&u8g);
+	do
+	{
+		u8g_SetFont(&u8g, u8g_font_fub49n);//u8g_font_profont10);//set current font
+		u8g_DrawStr(&u8g, x, y, str);//write string - you set coordinates and string
+
+//		u8g_DrawStr(&u8g, 5, 5, "11");
+//		u8g_DrawStr(&u8g, 61, 5, "22");
+////		u8g_DrawStr(&u8g, 5, 60, tx_str);
+//		u8g_DrawStr(&u8g, 5, 30, "33");
+//		dataBar();
+	}while(u8g_NextPage(&u8g));
+
+}
+
+void init_LCD(void)
+{
+	char *str = "Hello.";
+
+	// u8g 初始化
+	u8g_InitComFn(&u8g, &u8g_dev_ssd1306_128x64_i2c, u8g_com_hw_i2c_fn); //here we init our u8glib driver
+//
+	// 欢迎文字
+	u8g_FirstPage(&u8g);
+	do
+	{
+		draw(str);
+	}while(u8g_NextPage(&u8g));
+//	vTaskDelay(2000 / portTICK_PERIOD_MS);
+
+//	ui_show("XT", 60, 30);
+//
+//	u8g_SetFont(&u8g, u8g_font_profont10);//u8g_font_profont10);//set current font
+//
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 0, 0, 128, 16);//draw some box
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 0, 16, 128, 16);//draw some box
+//	}while(u8g_NextPage(&u8g));
+//
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 0, 32, 128, 16);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 0, 48, 128, 16);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 0, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 16, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 32, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 48, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 64, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 80, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 96, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+//	vTaskDelay(500 / portTICK_PERIOD_MS);
+//	u8g_FirstPage(&u8g);
+//	do
+//	{
+//		u8g_DrawBox(&u8g, 112, 0, 16, 64);//draw some box(x,y,w,h)
+//	}while(u8g_NextPage(&u8g));
+//
+
+
+
+}
+
 //static void save_local_task(void *pvParameters)
 //{
 //	ESP_LOGI(TAG, "start save task");
@@ -298,6 +473,7 @@ static void tcp_client_task(void *pvParameters)
         while (1) {
 
             ESP_LOGI(TAG, "Waiting picture command , 0xff 0xfe");
+            ESP_LOGI(TAG, "set exposure time , 0xff 0xef 8bit(H) 8bit(L)");
             int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);  // TODO socket网络接收有问题
             // Error occurred during receiving
             if (len < 0) {
@@ -311,7 +487,7 @@ static void tcp_client_task(void *pvParameters)
                 ESP_LOGI(TAG, "0x%x,0x%x\n", rx_buffer[0], rx_buffer[1]);
 
                 if(rx_buffer[0] == 0xff && rx_buffer[1] == 0xfe){
-
+                	ui_show("60", 5, 60);
                 	ESP_LOGI(TAG, "take a photo");
                 	led_open();
                 	camera_fb_t *pic = esp_camera_fb_get();
@@ -331,7 +507,38 @@ static void tcp_client_task(void *pvParameters)
         			else{
         				ESP_LOGI(TAG, "The picture is broken Reconnect the USB TOOL");
         			}
+                }else if(rx_buffer[0] == 0xff && rx_buffer[1] == 0xef)
+                {
+                	camera_config.exposure_value = (rx_buffer[2]<<8) + rx_buffer[3];
+                	ESP_LOGE(TAG, " exposure_value %d", camera_config.exposure_value);
+
+                	sensor_t *s = esp_camera_sensor_get();
+                	s->set_aec_value(s, camera_config.exposure_value);
+
+//                	char reg04 = SCCB_Read(s->slv_addr, 0x04);
+//                	short int aec = SCCB_Read(s->slv_addr, 0x10);
+//                	char reg45 = (SCCB_Read(s->slv_addr, 0x45))& 0x3F;
+//                	ESP_LOGD(TAG, "REG04:%d", reg04);
+//                	ESP_LOGD(TAG, "AEC:%d", aec);
+//                	ESP_LOGD(TAG, "REG45:%d", reg45);
+//
+////                    s->status.aec_value = ((uint16_t)get_reg_bits(s, BANK_SENSOR, 0x45, 0, 0x3F) << 10)
+////                                             | ((uint16_t)read_reg(s, BANK_SENSOR, 0x10) << 2)
+////                                             | get_reg_bits(s, BANK_SENSOR, 0x04, 0, 3);//0 - 1200
+//                    ESP_LOGD(TAG, "s->status.aec_value:%d", s->status.aec_value);
                 }
+
+            	sensor_t *s = esp_camera_sensor_get();
+            	char reg04 = SCCB_Read(s->slv_addr, 0x04);
+            	short int aec = SCCB_Read(s->slv_addr, 0x10);
+            	char reg45 = (SCCB_Read(s->slv_addr, 0x45))& 0x3F;
+            	ESP_LOGD(TAG, "REG04:%d", reg04);
+            	ESP_LOGD(TAG, "AEC:%d", aec);
+            	ESP_LOGD(TAG, "REG45:%d", reg45);
+                ESP_LOGD(TAG, "s->status.aec_value:%d", s->status.aec_value);
+//                    s->status.aec_value = ((uint16_t)get_reg_bits(s, BANK_SENSOR, 0x45, 0, 0x3F) << 10)
+//                                             | ((uint16_t)read_reg(s, BANK_SENSOR, 0x10) << 2)
+//                                             | get_reg_bits(s, BANK_SENSOR, 0x04, 0, 3);//0 - 1200
             }
         }
 
@@ -367,36 +574,36 @@ static void smartconfig_task(void * parm)
     vTaskDelete(NULL);
 }
 
-static camera_config_t camera_config = {
-    .pin_pwdn  = CAM_PIN_PWDN,
-    .pin_reset = CAM_PIN_RESET,
-    .pin_xclk = CAM_PIN_XCLK,
-    .pin_sscb_sda = CAM_PIN_SIOD,
-    .pin_sscb_scl = CAM_PIN_SIOC,
-
-    .pin_d7 = CAM_PIN_D7,
-    .pin_d6 = CAM_PIN_D6,
-    .pin_d5 = CAM_PIN_D5,
-    .pin_d4 = CAM_PIN_D4,
-    .pin_d3 = CAM_PIN_D3,
-    .pin_d2 = CAM_PIN_D2,
-    .pin_d1 = CAM_PIN_D1,
-    .pin_d0 = CAM_PIN_D0,
-    .pin_vsync = CAM_PIN_VSYNC,
-    .pin_href = CAM_PIN_HREF,
-    .pin_pclk = CAM_PIN_PCLK,
-
-    //XCLK 20MHz or 10MHz for OV2640 double FPS (Experimental)
-    .xclk_freq_hz = 20000000,
-    .ledc_timer = LEDC_TIMER_0,
-    .ledc_channel = LEDC_CHANNEL_0,
-
-    .pixel_format = PIXFORMAT_JPEG,//YUV422,GRAYSCALE,RGB565,JPEG
-    .frame_size = FRAMESIZE_CUSTOME,//QQVGA-QXGA Do not use sizes above QVGA when not JPEG
-
-    .jpeg_quality = 12, //0-63 lower number means higher quality
-    .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
-};
+//static camera_config_t camera_config = {
+//    .pin_pwdn  = CAM_PIN_PWDN,
+//    .pin_reset = CAM_PIN_RESET,
+//    .pin_xclk = CAM_PIN_XCLK,
+//    .pin_sscb_sda = CAM_PIN_SIOD,
+//    .pin_sscb_scl = CAM_PIN_SIOC,
+//
+//    .pin_d7 = CAM_PIN_D7,
+//    .pin_d6 = CAM_PIN_D6,
+//    .pin_d5 = CAM_PIN_D5,
+//    .pin_d4 = CAM_PIN_D4,
+//    .pin_d3 = CAM_PIN_D3,
+//    .pin_d2 = CAM_PIN_D2,
+//    .pin_d1 = CAM_PIN_D1,
+//    .pin_d0 = CAM_PIN_D0,
+//    .pin_vsync = CAM_PIN_VSYNC,
+//    .pin_href = CAM_PIN_HREF,
+//    .pin_pclk = CAM_PIN_PCLK,
+//
+//    //XCLK 20MHz or 10MHz for OV2640 double FPS (Experimental)
+//    .xclk_freq_hz = 20000000,
+//    .ledc_timer = LEDC_TIMER_0,
+//    .ledc_channel = LEDC_CHANNEL_0,
+//
+//    .pixel_format = PIXFORMAT_JPEG,//YUV422,GRAYSCALE,RGB565,JPEG
+//    .frame_size = FRAMESIZE_CUSTOME,//QQVGA-QXGA Do not use sizes above QVGA when not JPEG
+//
+//    .jpeg_quality = 12, //0-63 lower number means higher quality
+//    .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
+//};
 
 static esp_err_t init_camera()
 {
@@ -414,8 +621,33 @@ static esp_err_t init_camera()
         return err;
     }
 
+    //关闭白平衡/关闭自动曝光 20200918
+	sensor_t *s = esp_camera_sensor_get();
+	s->set_whitebal(s, 0);
+    ESP_LOGI(TAG, "White Balance Closed");
+	s->set_exposure_ctrl(s, 0);
+    ESP_LOGI(TAG, "Auto Exposure Closed");
+
     return ESP_OK;
 }
+
+static esp_err_t i2c_master_init()
+{
+    ESP_LOGE(TAG, "i2c Init start");
+    int i2c_master_port = I2C_MASTER_NUM;
+    i2c_config_t conf;
+    conf.mode = I2C_MODE_MASTER;
+    conf.sda_io_num = I2C_MASTER_SDA_IO;
+    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.scl_io_num = I2C_MASTER_SCL_IO;
+    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
+    i2c_param_config(i2c_master_port, &conf);
+    return i2c_driver_install(i2c_master_port, conf.mode,
+                              I2C_MASTER_RX_BUF_DISABLE,
+                              I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+
 
 void app_main(void)
 {
@@ -432,5 +664,6 @@ void app_main(void)
 	init_camera();
 
 	initialise_wifi();
-
+	i2c_master_init();
+	init_LCD();
 }
